@@ -11,7 +11,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test labs/resilient-reader/reader.test.mjs
+      - run: node --test labs/resilient-reader/reader.test.mjs labs/resilient-reader/jobs.test.mjs
       - run: node labs/resilient-reader/demo.mjs
   checks:
     runs-on: ubuntu-latest
@@ -21,6 +21,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: dotnet run --project labs/modular-jobs/Checks -c Release
+      - run: node labs/resilient-reader/jobs.integration.mjs
       - name: Compile infrastructure without deployment
         run: az bicep build --file infra/storage.bicep --outfile /tmp/storage.json

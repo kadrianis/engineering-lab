@@ -2,6 +2,8 @@
 
 ## LABS_ — Lectures SaaS résilientes
 
+[LABS_ — Client de tâches avec contrat vérifié](labs/resilient-reader/LABS_JOBS.md) : origine configurée, GUID validé, identité de tâche et schéma contrôlés, 404 explicite, 20 tests métier et intégration réelle avec l'API .NET. Installation, cours, exercice et correction complète inclus.
+
 [Client HTTP GET avec reprises bornées](labs/resilient-reader/README.md) : Node.js 22 sans dépendance npm, Retry-After, budget temporel global, limite de réponse et 21 tests. Cours, exercice corrigé et démonstration locale inclus. Ce lecteur complète le suivi de tâches SaaS ; il ne répète aucune écriture.
 
 ```sh
