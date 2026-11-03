@@ -26,5 +26,6 @@ jobs:
           node-version: '22'
       - run: dotnet run --project labs/modular-jobs/Checks -c Release
       - run: node labs/resilient-reader/jobs.integration.mjs
+      - run: node labs/resilient-reader/jobs.integration.mjs --rate-limit
       - name: Compile infrastructure without deployment
         run: az bicep build --file infra/storage.bicep --outfile /tmp/storage.json

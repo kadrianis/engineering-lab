@@ -16,7 +16,9 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 execFileSync('dotnet', ['build', 'labs/modular-jobs/Api', '-c', 'Release', '--nologo'],
   { cwd: root, timeout: 120000, stdio: 'pipe' });
 // Run the DLL directly: cleanup must target the server, not a dotnet-run parent.
-const child = spawn('dotnet', ['labs/modular-jobs/Api/bin/Release/net10.0/Api.dll', '--urls', origin], {
+const rateLimitTest = process.argv.includes('--rate-limit');
+const limitArgs = rateLimitTest ? ['--JobsRateLimit:PermitLimit', '3', '--JobsRateLimit:WindowSeconds', '1'] : [];
+const child = spawn('dotnet', ['labs/modular-jobs/Api/bin/Release/net10.0/Api.dll', '--urls', origin, ...limitArgs], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';
@@ -51,6 +53,24 @@ try {
   assert.deepEqual(await client.getJob('00000000-0000-0000-0000-000000000000'),
     { kind: 'not-found', attempts: 1 });
   console.log('PASS: real .NET API creation, validated GET, missing job (3 assertions).');
+  if (rateLimitTest) {
+    // Exhaust a fresh or partially consumed window; no mocked HTTP or clock.
+    let rejected;
+    for (let i = 0; i < 4; i++) {
+      const response = await fetch(`${origin}/jobs/${job.id}`, { signal: AbortSignal.timeout(2000) });
+      await response.text();
+      if (response.status === 429) { rejected = response; break; }
+    }
+    assert.ok(rejected, 'real Kestrel must reject excess traffic');
+    assert.equal(rejected.headers.get('retry-after'), '1');
+    assert.equal(rejected.headers.get('cache-control'), 'no-store');
+    const started = performance.now();
+    const resumed = await client.getJob(job.id, { timeoutMs: 5000 });
+    assert.deepEqual(resumed.job, job);
+    assert.ok(resumed.attempts >= 2 && resumed.attempts <= 3, 'GET retried after 429');
+    assert.ok(performance.now() - started >= 990, 'client waited for Retry-After');
+    console.log('PASS: real 429, Retry-After=1, no-store, resumed job, bounded attempts, minimum wait (6 assertions).');
+  }
 } finally {
   if (child.exitCode === null) {
     child.kill();
