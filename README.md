@@ -2,6 +2,8 @@
 
 ## LABS_ — Lectures SaaS résilientes
 
+[LABS_ — Créations sans doublons](labs/modular-jobs/LABS_IDEMPOTENCY.md) : clé de requête facultative, admission atomique, rejeu 200, conflit 409 et tests HTTP concurrents. Garantie mémoire limitée à une instance ; cours et correction complète inclus.
+
 [LABS_ — Budget de requêtes et reprises après 429](labs/modular-jobs/LABS_RATE_LIMIT.md) : limite commune aux lectures et créations, délai serveur explicite, tests concurrents et intégration client réelle. Cours, exercice et correction complète inclus. Budget par instance ; aucune identité utilisateur impliquée.
 
 [LABS_ — Client de tâches avec contrat vérifié](labs/resilient-reader/LABS_JOBS.md) : origine configurée, GUID validé, identité de tâche et schéma contrôlés, 404 explicite, 20 tests métier et intégration réelle avec l'API .NET. Installation, cours, exercice et correction complète inclus.

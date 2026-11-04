@@ -39,12 +39,30 @@ public static class ApiHost
         var app = builder.Build();
         app.UseRateLimiter();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-        app.MapPost("/jobs", (CreateJob input, JobStore store) =>
+        app.MapPost("/jobs", (CreateJob input, JobStore store, HttpContext context) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
+            Guid? requestKey = null;
+            if (context.Request.Headers.TryGetValue("X-Job-Request-Key", out var values))
+            {
+                if (values.Count != 1 || !Guid.TryParseExact(values[0], "D", out var parsed))
+                    return Results.Problem(statusCode: 400, title: "Expected one GUID request key");
+                requestKey = parsed;
+            }
             try
             {
-                var job = store.Create(input.Title);
+                var result = store.CreateOnce(input.Title, requestKey);
+                var job = result.Job;
+                if (result.Replayed)
+                {
+                    context.Response.Headers.Location = $"/jobs/{job.Id}";
+                    return Results.Ok(job);
+                }
                 return Results.Created($"/jobs/{job.Id}", job);
+            }
+            catch (JobKeyConflictException)
+            {
+                return Results.Problem(statusCode: 409, title: "Request key already used with another title");
             }
             catch (ArgumentException error)
             {

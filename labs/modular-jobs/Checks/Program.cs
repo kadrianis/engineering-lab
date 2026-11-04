@@ -88,4 +88,69 @@ foreach (var (key, value) in new[] { ("PermitLimit", "0"), ("PermitLimit", "1000
     catch (ArgumentOutOfRangeException) { Check(true, "configuration hors bornes refusée au démarrage"); }
     catch (InvalidOperationException) { Check(true, "configuration non entière refusée au démarrage"); }
 }
+// Idempotency is atomic with job admission, bounded by the same 1000 job slots.
+var keyedStore = new JobStore();
+var sameKey = Guid.NewGuid();
+var creations = new System.Collections.Concurrent.ConcurrentBag<Creation>();
+Parallel.For(0, 100, _ => creations.Add(keyedStore.CreateOnce("  stable  ", sameKey)));
+Check(creations.Count(c => !c.Replayed) == 1, "une seule admission concurrente par clé");
+Check(creations.Select(c => c.Job.Id).Distinct().Count() == 1, "cent appels partagent un identifiant");
+Check(keyedStore.CreateOnce("stable", sameKey).Replayed, "titre normalisé rejoué");
+try { keyedStore.CreateOnce("different", sameKey); throw new Exception("Conflict absent"); }
+catch (JobKeyConflictException) { Check(true, "conflit de contenu rejeté"); }
+for (var i = 1; i < 1000; i++) keyedStore.Create("filler");
+Check(keyedStore.CreateOnce("stable", sameKey).Replayed, "rejeu admis à capacité pleine");
+try { keyedStore.CreateOnce("overflow", Guid.NewGuid()); throw new Exception("Capacity absent"); }
+catch (InvalidOperationException) { Check(true, "nouvelle clé refusée à capacité pleine"); }
+var unusedKey = Guid.NewGuid();
+try { store.CreateOnce(" ", unusedKey); throw new Exception("Validation absent"); }
+catch (ArgumentException) { Check(!store.CreateOnce("valid", unusedKey).Replayed, "échec validation ne réserve pas la clé"); }
+
+await using var keyedApi = ApiHost.Build(["--urls", "http://127.0.0.1:0",
+    "--JobsRateLimit:PermitLimit", "100", "--Logging:LogLevel:Default", "Warning"]);
+await keyedApi.StartAsync();
+try
+{
+    var address = keyedApi.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+    using var client = new HttpClient { BaseAddress = new Uri(address) };
+    async Task<HttpResponseMessage> Send(string title, params string[] keys)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/jobs") { Content = JsonContent.Create(new { title }) };
+        if (keys.Length > 0) request.Headers.TryAddWithoutValidation("X-Job-Request-Key", keys);
+        return await client.SendAsync(request);
+    }
+    var key = Guid.NewGuid().ToString();
+    var responses = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => Send("  export  ", key)));
+    Check(responses.Count(r => r.StatusCode == HttpStatusCode.Created) == 1, "HTTP concurrence : un 201");
+    Check(responses.Count(r => r.StatusCode == HttpStatusCode.OK) == 19, "HTTP concurrence : dix-neuf rejeux 200");
+    var payloads = await Task.WhenAll(responses.Select(r => r.Content.ReadFromJsonAsync<Job>()));
+    Check(payloads.Distinct().Count() == 1, "HTTP rejeux : corps identiques");
+    Check(responses.All(r => r.Headers.Location?.ToString() == $"/jobs/{payloads[0]!.Id}"), "Location identique sur 201 et 200");
+    Check(responses.All(r => r.Headers.CacheControl?.NoStore == true), "créations et rejeux sans cache");
+    using var conflict = await Send("secret conflicting title", key);
+    Check(conflict.StatusCode == HttpStatusCode.Conflict, "HTTP conflit 409");
+    var problem = await conflict.Content.ReadAsStringAsync();
+    Check(!problem.Contains("secret") && !problem.Contains(key), "conflit ne divulgue ni titre ni clé");
+    Check(conflict.Content.Headers.ContentType?.MediaType == "application/problem+json", "conflit ProblemDetails");
+    using var replay = await Send("export", key.ToUpperInvariant());
+    Check(replay.StatusCode == HttpStatusCode.OK, "casse GUID et normalisation titre acceptées");
+    foreach (var bad in new[] { "", "not-a-guid", key + "," + key, "{" + key + "}" })
+    {
+        using var rejected = await Send("export", bad);
+        Check(rejected.StatusCode == HttpStatusCode.BadRequest, "clé invalide 400");
+    }
+    using var multi = await Send("export", key, Guid.NewGuid().ToString());
+    Check(multi.StatusCode == HttpStatusCode.BadRequest, "plusieurs clés refusées");
+    using var a = await Send("export");
+    using var b = await Send("export");
+    Check(a.StatusCode == HttpStatusCode.Created && b.StatusCode == HttpStatusCode.Created, "sans clé : créations indépendantes");
+    Check(a.Headers.Location != b.Headers.Location, "sans clé : identifiants distincts");
+    using var other = await Send("export", Guid.NewGuid().ToString());
+    Check(other.StatusCode == HttpStatusCode.Created && other.Headers.Location != replay.Headers.Location, "autre clé : nouvelle tâche");
+    using var retryAfterConflict = await Send("export", key);
+    Check(retryAfterConflict.StatusCode == HttpStatusCode.OK, "conflit ne remplace pas la première tâche");
+    foreach (var response in responses) response.Dispose();
+}
+finally { await keyedApi.StopAsync(); }
+
 Console.WriteLine($"SUCCESS: {count} checks");
